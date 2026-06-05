@@ -5,6 +5,7 @@ import subprocess
 import sys
 import threading
 import time
+import pyfiglet
 from utils import log, setup_log, current_ip
 from proxy_pool import ProxyPool
 
@@ -54,15 +55,10 @@ def _gradient(text: str, r1: int, g1: int, b1: int, r2: int, g2: int, b2: int) -
     return "".join(out)
 
 def _print_logo():
-    logo_lines = [
-        "  ██████  ██   ██  ██████  ███████  ██████  ██    ██ ██████  ███    ██ ",
-        " ██       ██   ██ ██    ██ ██      ██    ██ ██    ██ ██   ██ ████   ██ ",
-        " ██   ███ ███████ ██    ██ █████   ██    ██ ██    ██ ██████  ██ ██  ██ ",
-        " ██    ██ ██   ██ ██    ██ ██      ██    ██ ██    ██ ██   ██ ██  ██ ██ ",
-        "  ██████  ██   ██  ██████  ██       ██████   ██████  ██   ██ ██   ████ ",
-    ]
-    for i, line in enumerate(logo_lines):
-        t = i / max(len(logo_lines) - 1, 1)
+    raw = pyfiglet.figlet_format("GHOSTVPN", font="slant")
+    lines = raw.rstrip("\n").split("\n")
+    for i, line in enumerate(lines):
+        t = i / max(len(lines) - 1, 1)
         r = int(40 + (160 - 40) * t)
         g = int(200 + (50 - 200) * t)
         b = int(255 + (255 - 255) * t)

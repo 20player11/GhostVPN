@@ -1,1 +1,2 @@
 PySocks==1.7.1
+pyfiglet==1.0.4
