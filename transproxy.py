@@ -1,3 +1,4 @@
+import select
 import socket
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -67,17 +68,24 @@ class TransProxy:
                 pass
         self._pool_exec.shutdown(wait=False)
 
-    def _pipe(self, src: socket.socket, dst: socket.socket):
+    def _pipe(self, a: socket.socket, b: socket.socket):
         try:
             while True:
-                data = src.recv(65536)
-                if not data:
-                    break
-                dst.sendall(data)
+                r, _, _ = select.select([a, b], [], [])
+                if a in r:
+                    data = a.recv(65536)
+                    if not data:
+                        break
+                    b.sendall(data)
+                if b in r:
+                    data = b.recv(65536)
+                    if not data:
+                        break
+                    a.sendall(data)
         except:
             pass
         finally:
-            for s in (src, dst):
+            for s in (a, b):
                 try:
                     s.close()
                 except:
@@ -89,20 +97,37 @@ class TransProxy:
             log.debug("Proxying %s -> %s:%d", conn.getpeername(), dst_host, dst_port)
             proxy = self.pool.get()
             if not proxy:
-                log.warning("No proxy available, dropping %s:%d", dst_host, dst_port)
+                log.warning("No proxy available for %s:%d", dst_host, dst_port)
                 conn.close()
                 return
-            up = socks.socksocket()
+            max_attempts = min(self.pool.size() or 5, 5)
+            for _ in range(max_attempts):
+                up = None
+                try:
+                    up = socks.socksocket()
+                    up.setsockopt(socket.SOL_SOCKET, socket.SO_MARK, BYPASS_MARK)
+                    up.settimeout(15)
+                    up.set_proxy(socks.SOCKS5, proxy[0], proxy[1])
+                    log.debug("Trying proxy %s:%d for %s:%d", proxy[0], proxy[1], dst_host, dst_port)
+                    up.connect((dst_host, dst_port))
+                    self._pipe(conn, up)
+                    self.pool.record_success()
+                    return
+                except Exception:
+                    if up:
+                        try:
+                            up.close()
+                        except:
+                            pass
+                    proxy = self.pool.mark_failed()
+                    if not proxy:
+                        break
+            log.warning("All proxies failed for %s:%d, connecting directly", dst_host, dst_port)
+            up = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             up.setsockopt(socket.SOL_SOCKET, socket.SO_MARK, BYPASS_MARK)
-            up.settimeout(30)
-            up.set_proxy(socks.SOCKS5, proxy[0], proxy[1])
+            up.settimeout(15)
             up.connect((dst_host, dst_port))
-            t1 = threading.Thread(target=self._pipe, args=(conn, up), daemon=True)
-            t2 = threading.Thread(target=self._pipe, args=(up, conn), daemon=True)
-            t1.start()
-            t2.start()
-            t1.join()
-            t2.join()
+            self._pipe(conn, up)
         except Exception as e:
             log.debug("Proxy error: %s", e)
         finally:

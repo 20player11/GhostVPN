@@ -1,3 +1,4 @@
+import select
 import socket
 import threading
 import struct
@@ -89,14 +90,29 @@ class LocalSocksProxy:
                 log.warning("No proxy available")
                 conn.sendall(struct.pack("BBB", SOCKS_VERSION, 1, 0))
                 return
-            up = sockslib.socksocket()
-            up.settimeout(30)
-            up.set_proxy(sockslib.SOCKS5, proxy[0], proxy[1])
-            up.connect((dst_addr, dst_port))
-            bnd = ("0.0.0.0", 0)
-            resp = struct.pack("BBB", SOCKS_VERSION, 0, 0) + struct.pack("BBBB", 1, *socket.inet_aton(bnd[0])) + struct.pack("!H", bnd[1])
-            conn.sendall(resp)
-            self._pipe(conn, up)
+            max_attempts = min(self.pool.size() or 5, 5)
+            for _ in range(max_attempts):
+                up = None
+                try:
+                    up = sockslib.socksocket()
+                    up.settimeout(15)
+                    up.set_proxy(sockslib.SOCKS5, proxy[0], proxy[1])
+                    up.connect((dst_addr, dst_port))
+                    bnd = ("0.0.0.0", 0)
+                    resp = struct.pack("BBB", SOCKS_VERSION, 0, 0) + struct.pack("BBBB", 1, *socket.inet_aton(bnd[0])) + struct.pack("!H", bnd[1])
+                    conn.sendall(resp)
+                    self._pipe(conn, up)
+                    self.pool.record_success()
+                    return
+                except Exception:
+                    if up:
+                        try:
+                            up.close()
+                        except:
+                            pass
+                    proxy = self.pool.mark_failed()
+                    if not proxy:
+                        break
         except Exception as e:
             log.debug("SOCKS5 error: %s", e)
         finally:
@@ -116,25 +132,23 @@ class LocalSocksProxy:
         return ""
 
     def _pipe(self, a: socket.socket, b: socket.socket):
-        t1 = threading.Thread(target=self._relay, args=(a, b), daemon=True)
-        t2 = threading.Thread(target=self._relay, args=(b, a), daemon=True)
-        t1.start()
-        t2.start()
-        t1.join()
-        t2.join()
-
-    @staticmethod
-    def _relay(src: socket.socket, dst: socket.socket):
         try:
             while True:
-                data = src.recv(65536)
-                if not data:
-                    break
-                dst.sendall(data)
+                r, _, _ = select.select([a, b], [], [])
+                if a in r:
+                    data = a.recv(65536)
+                    if not data:
+                        break
+                    b.sendall(data)
+                if b in r:
+                    data = b.recv(65536)
+                    if not data:
+                        break
+                    a.sendall(data)
         except:
             pass
         finally:
-            for s in (src, dst):
+            for s in (a, b):
                 try:
                     s.close()
                 except:

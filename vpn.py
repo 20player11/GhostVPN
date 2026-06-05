@@ -197,22 +197,21 @@ def run_vpn(cfg: Config):
     else:
         pool.refresh()
 
+    pool.print_status()
     if pool.get() is None:
         input("  No working proxies found. Press Enter...")
         return
 
     ip = current_ip(pool.get())
     print(f"  [2/4] Exit IP through proxy: {ip or 'unknown'}")
+    log.info("VPN ready — pool has %d proxies, active: %s", pool.size(), ip or "?")
 
     stop_event = threading.Event()
 
-    def on_switch(proxy):
-        ip = current_ip(proxy)
-        log.info("New IP: %s", ip or "unknown")
-    pool.on_switch.append(on_switch)
+    pool.on_switch.append(lambda p: log.info("Switched proxy — %s:%d", *p))
 
     if cfg.mode == "tun":
-        from tun import TunManager
+        from tun import TunManager, PROXY_PORT
         from transproxy import TransProxy
         print(f"  [3/4] Setting up TUN device and routing...")
         tun = TunManager()
@@ -227,7 +226,7 @@ def run_vpn(cfg: Config):
         except Exception as e:
             input(f"  Failed to set up routing: {e}. Press Enter...")
             return
-        proxy = TransProxy(pool, bind_port=cfg.proxy_port)
+        proxy = TransProxy(pool, bind_port=PROXY_PORT)
         proxy.start()
         threading.Thread(target=proxy.serve, daemon=True).start()
         pool.start_auto_rotate()
@@ -281,7 +280,7 @@ def main():
     ap.add_argument("-h", "--help", action="store_true")
     args, _ = ap.parse_known_args()
 
-    if args.help or args.cli:
+    if args.help:
         print("""GhostVPN — rotating-IP VPN
 
 Usage:
