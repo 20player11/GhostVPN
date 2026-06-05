@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import signal
 import subprocess
@@ -10,6 +11,7 @@ from utils import log, setup_log, current_ip
 from proxy_pool import ProxyPool
 
 PLATFORM = sys.platform
+CONFIG_PATH = os.path.expanduser("~/.ghostvpn_config")
 PLATFORM_OS = {"linux": "Linux", "darwin": "macOS", "win32": "Windows"}.get(PLATFORM, PLATFORM)
 
 def detect_default_mode() -> str:
@@ -76,6 +78,33 @@ class Config:
         self.sys_proxy = False
         self.verbose = False
         self.kill_switch = False
+
+    def save(self):
+        data = {
+            "mode": self.mode, "interval": self.interval,
+            "proxy_port": self.proxy_port, "proxy_file": self.proxy_file,
+            "sys_proxy": self.sys_proxy, "kill_switch": self.kill_switch,
+            "verbose": self.verbose,
+        }
+        try:
+            with open(CONFIG_PATH, "w") as f:
+                json.dump(data, f)
+        except Exception as e:
+            log.debug("Failed to save config: %s", e)
+
+    def load(self):
+        try:
+            with open(CONFIG_PATH) as f:
+                data = json.load(f)
+            self.mode = data.get("mode", self.mode)
+            self.interval = data.get("interval", self.interval)
+            self.proxy_port = data.get("proxy_port", self.proxy_port)
+            self.proxy_file = data.get("proxy_file", self.proxy_file)
+            self.sys_proxy = data.get("sys_proxy", self.sys_proxy)
+            self.kill_switch = data.get("kill_switch", self.kill_switch)
+            self.verbose = data.get("verbose", self.verbose)
+        except:
+            pass
 
     def mode_label(self):
         return f"TUN (Linux)" if self.mode == "tun" else "SOCKS (cross-platform)"
@@ -159,6 +188,7 @@ def settings_menu(cfg: Config):
         elif c == "6":
             cfg.kill_switch = not cfg.kill_switch
         elif c == "7":
+            cfg.save()
             return
 
 def about():
@@ -239,11 +269,43 @@ def run_vpn(cfg: Config):
         dns.start()
         threading.Thread(target=dns.serve, daemon=True).start()
         pool.start_auto_rotate()
+        CYAN = "\033[38;2;0;200;255m"
+        YELLOW = "\033[38;2;255;220;80m"
+        GREEN = "\033[38;2;100;255;100m"
+        BOLD = "\033[1m"
+        RESET = "\033[0m"
+
+        def _status():
+            cols = 80
+            try:
+                cols = os.get_terminal_size().columns
+            except:
+                pass
+            while not stop_event.is_set():
+                active = pool.get()
+                host = "none"
+                if active:
+                    host = f"{active[0].split('.')[0]}.{active[0].split('.')[1]}.*.*"
+                s = proxy.stats_line()
+                bar = f"  {BOLD}GHOSTVPN{RESET}  {CYAN}│{RESET}  {s}  {CYAN}│{RESET}  pool {GREEN}{pool.size()}{RESET}  {CYAN}│{RESET}  proxy {YELLOW}{host}{RESET}  "
+                if len(bar) >= cols:
+                    bar = bar[:cols - 1]
+                else:
+                    bar = bar.ljust(cols - 1)
+                sys.stdout.write(f"\r{RESET}{bar}")
+                sys.stdout.flush()
+                stop_event.wait(1)
+            sys.stdout.write(f"\r\033[K")
+            sys.stdout.flush()
+
+        threading.Thread(target=_status, daemon=True).start()
         print(f"  [4/4] VPN is LIVE! Rotating every {cfg.interval}s")
         print(f"\n  ── Press Ctrl+C to stop ──\n")
         _orig = signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)
         def cleanup(*_):
-            pool.stop(); proxy.stop(); dns.stop(); tun.cleanup(); stop_event.set()
+            sys.stdout.write(f"\n")
+            sys.stdout.flush()
+            cfg.save(); pool.stop(); proxy.stop(); dns.stop(); tun.cleanup(); stop_event.set()
             signal.signal(signal.SIGINT, _orig[0])
             signal.signal(signal.SIGTERM, _orig[1])
         signal.signal(signal.SIGINT, cleanup)
@@ -267,7 +329,7 @@ def run_vpn(cfg: Config):
         print(f"\n  ── Press Ctrl+C to stop ──\n")
         _orig = signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)
         def cleanup(*_):
-            pool.stop(); local.stop()
+            cfg.save(); pool.stop(); local.stop()
             if cfg.sys_proxy:
                 set_system_proxy("127.0.0.1", cfg.proxy_port, enabled=False)
             signal.signal(signal.SIGINT, _orig[0])
@@ -311,6 +373,7 @@ CLI options:
 
     if args.cli:
         cfg = Config()
+        cfg.load()
         if args.mode: cfg.mode = args.mode
         if args.interval: cfg.interval = args.interval
         if args.proxy_port: cfg.proxy_port = args.proxy_port
@@ -321,6 +384,7 @@ CLI options:
         run_vpn(cfg)
     else:
         cfg = Config()
+        cfg.load()
         main_menu(cfg)
 
 if __name__ == "__main__":

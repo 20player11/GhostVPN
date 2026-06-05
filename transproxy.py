@@ -37,6 +37,27 @@ class TransProxy:
         self._pool_exec = ThreadPoolExecutor(max_workers=MAX_WORKERS)
         self._limiter = RateLimiter()
         self._allowed = allowed_ips
+        self._stats_lock = threading.Lock()
+        self._start = time.monotonic()
+        self._connections = 0
+        self._bytes_up = 0
+        self._bytes_down = 0
+
+    def stats_line(self) -> str:
+        with self._stats_lock:
+            n = self._connections
+            bu = self._bytes_up
+            bd = self._bytes_down
+        elapsed = int(time.monotonic() - self._start)
+        total = bu + bd
+        unit = "B"
+        if total > 1024 ** 3:
+            total, unit = total / 1024 ** 3, "GB"
+        elif total > 1024 ** 2:
+            total, unit = total / 1024 ** 2, "MB"
+        elif total > 1024:
+            total, unit = total / 1024, "KB"
+        return f"{elapsed // 60}m{elapsed % 60:02d}s • {n} conn • {total:.1f} {unit}"
 
     def start(self):
         self._srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -78,11 +99,15 @@ class TransProxy:
                     if not data:
                         break
                     b.sendall(data)
+                    with self._stats_lock:
+                        self._bytes_up += len(data)
                 if b in r:
                     data = b.recv(65536)
                     if not data:
                         break
                     a.sendall(data)
+                    with self._stats_lock:
+                        self._bytes_down += len(data)
         except:
             pass
         finally:
@@ -93,6 +118,8 @@ class TransProxy:
                     pass
 
     def _handle(self, conn: socket.socket):
+        with self._stats_lock:
+            self._connections += 1
         try:
             dst_host, dst_port = get_orig_dst(conn)
             log.debug("Proxying %s -> %s:%d", conn.getpeername(), dst_host, dst_port)
