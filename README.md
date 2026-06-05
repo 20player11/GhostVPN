@@ -10,23 +10,34 @@ A rotating-IP VPN that routes your traffic through a pool of free SOCKS5 proxies
 ## How it works
 
 ```
-                          ┌──────────────────────┐
-Your browser ──▶ tun0 ──▶ │ iptables REDIRECT    │
-      │                   │  → TCP → :12345      │
-      │                   └──────────┬───────────┘
-      │                              │
-      │  ┌───────────────────────────▼───────────────┐
-      └──│ SOCKS5 proxy pool (rotates every N s)     │
-         │                                            │
-         │   proxy1:1080 ──▶ internet (IP 1)          │
-         │   proxy2:1080 ──▶ internet (IP 2)          │
-         │   proxy3:1080 ──▶ internet (IP 3) ...      │
-         └────────────────────────────────────────────┘
+                          ┌──────────────────────────┐
+Your browser ──▶ tun0 ──▶ │ iptables REDIRECT        │
+      │                   │  TCP :80/443 → :12345     │
+      │                   │  UDP :53    → :5353       │
+      │                   └────────────┬─────────────┘
+      │                                │
+      │  ┌─────────────────────────────▼─────────────────┐
+      │  │          TransProxy (:12345)                   │
+      │  │    TCP through SOCKS5 proxy pool               │
+      │  └─────────────────────────────┬─────────────────┘
+      │                                │
+      │  ┌─────────────────────────────▼─────────────────┐
+      │  │          DnsProxy (:5353)                     │
+      │  │    DNS over TCP through SOCKS5 → 1.1.1.1      │
+      │  └───────────────────────────────────────────────┘
+      │
+      │              ┌──────────────────────────────┐
+      └──────────────│ SOCKS5 proxy pool            │
+                     │  (rotates every N s)         │
+                     │  proxy1 ──▶ internet (IP 1)  │
+                     │  proxy2 ──▶ internet (IP 2)  │
+                     │  proxy3 ──▶ internet (IP 3)  │
+                     └──────────────────────────────┘
 ```
 
 Two modes:
 
-- **TUN mode** (Linux) — system-wide VPN using `tun` + `iptables`. All TCP traffic goes through the proxy automatically.
+- **TUN mode** (Linux) — system-wide VPN using `tun` + `iptables`. All TCP traffic goes through the proxy automatically. DNS queries are forwarded through the proxy via a local DNS forwarder to prevent leaks.
 - **SOCKS mode** (Linux, macOS, Windows) — local SOCKS5 proxy on `127.0.0.1:10800`. Configure your apps or system proxy to use it.
 
 ## Quick start
@@ -108,7 +119,7 @@ Run `python vpn.py` to see:
 ```
 
 - **[1]** — starts the VPN with current settings
-- **[2]** — configure mode, interval, port, proxy source, system proxy
+- **[2]** — configure mode, interval, port, proxy source, system proxy, kill switch
 - **[3]** — version, license, repo link
 - **[4]** — exit
 
@@ -118,14 +129,15 @@ Run `python vpn.py` to see:
 python vpn.py --cli [options]
 ```
 
-| Flag           | Default                       | Description                                       |
-| -------------- | ----------------------------- | ------------------------------------------------- |
-| `--mode`       | `tun` (Linux), `socks` (else) | `tun` = system VPN (Linux), `socks` = local proxy |
-| `--interval`   | `180`                         | Seconds between IP rotations                      |
-| `--proxies`    | `—`                           | Path to custom proxy list (`host:port` per line)  |
-| `--proxy-port` | `10800`                       | Local SOCKS proxy port (socks mode)               |
-| `--sys-proxy`  | `off`                         | Automatically set system proxy (macOS/Windows)    |
-| `--verbose`    | `off`                         | Debug-level logs                                  |
+| Flag            | Default                       | Description                                       |
+| --------------- | ----------------------------- | ------------------------------------------------- |
+| `--mode`        | `tun` (Linux), `socks` (else) | `tun` = system VPN (Linux), `socks` = local proxy |
+| `--interval`    | `180`                         | Seconds between IP rotations                      |
+| `--proxies`     | `—`                           | Path to custom proxy list (`host:port` per line)  |
+| `--proxy-port`  | `10800`                       | Local SOCKS proxy port (socks mode)               |
+| `--sys-proxy`   | `off`                         | Automatically set system proxy (macOS/Windows)    |
+| `--kill-switch` | `off`                         | Drop connections if all proxies fail (no IP leak) |
+| `--verbose`     | `off`                         | Debug-level logs                                  |
 
 ### Custom proxy lists
 
@@ -135,13 +147,15 @@ python vpn.py --cli --mode socks --proxies proxies.txt
 
 ## Platform comparison
 
-| Feature             | Linux (TUN)      | macOS (SOCKS)        | Windows (SOCKS)      |
-| ------------------- | ---------------- | -------------------- | -------------------- |
-| System-wide routing | ✅ Automatic     | ⚠️ Manual app config | ⚠️ Manual app config |
-| Root required       | ✅ Yes           | ❌ No                | ❌ No                |
-| Proxy rotation      | ✅               | ✅                   | ✅                   |
-| Auto system proxy   | ❌               | ✅ `--sys-proxy`     | ✅ `--sys-proxy`     |
-| UDP/ICMP            | ❌ Not supported | ❌ Not supported     | ❌ Not supported     |
+| Feature             | Linux (TUN)        | macOS (SOCKS)        | Windows (SOCKS)      |
+| ------------------- | ------------------ | -------------------- | -------------------- |
+| System-wide routing | ✅ Automatic       | ⚠️ Manual app config | ⚠️ Manual app config |
+| Root required       | ✅ Yes             | ❌ No                | ❌ No                |
+| Proxy rotation      | ✅                 | ✅                   | ✅                   |
+| Kill switch         | ✅ `--kill-switch` | ✅                   | ✅                   |
+| DNS leak protection | ✅ Built-in        | ⚠️ Manual app config | ⚠️ Manual app config |
+| Auto system proxy   | ❌                 | ✅ `--sys-proxy`     | ✅ `--sys-proxy`     |
+| UDP/ICMP            | ❌ Not supported   | ❌ Not supported     | ❌ Not supported     |
 
 ## Verification
 
@@ -163,7 +177,7 @@ GhostVPN has the following security features enabled:
 
 - **Encryption** — GhostVPN does not encrypt traffic end-to-end. SOCKS5 proxies see plaintext data. Use HTTPS/TLS for sensitive traffic.
 - **Privilege separation** — The VPN runs in a single process. No sandboxing or seccomp is applied.
-- **DNS** — DNS queries are resolved locally and may leak. Use a DNS-over-HTTPS client for full coverage.
+- **DNS** — DNS queries are redirected through the VPN via the built-in DNS proxy (`dns.py`). No more DNS leaks.
 - **IPv6** — IPv6 traffic is blocked in TUN mode to prevent leaks. SOCKS mode only handles IPv4.
 
 ## Project structure
@@ -175,6 +189,7 @@ vpn/
 ├── transproxy.py     # Linux transparent TCP → SOCKS5 proxy
 ├── local_proxy.py    # Cross-platform SOCKS5 proxy server
 ├── proxy_pool.py     # Auto-fetch, health-check, rotation
+├── dns.py            # DNS forwarder (prevents DNS leaks in TUN mode)
 ├── utils.py          # Logging, IP lookup, helpers
 ├── requirements.txt  # PySocks + pyfiglet
 ├── SECURITY.md       # Disclosure policy
