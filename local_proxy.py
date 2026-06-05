@@ -1,24 +1,47 @@
 import socket
 import threading
 import struct
+from concurrent.futures import ThreadPoolExecutor
+from collections import defaultdict
+import time
 import socks as sockslib
 from utils import log
 
 SOCKS_VERSION = 5
+MAX_WORKERS = 100
+
+class RateLimiter:
+    def __init__(self, max_per_sec: int = 50):
+        self._max = max_per_sec
+        self._times = defaultdict(list)
+        self._lock = threading.Lock()
+
+    def allow(self, key: str = "") -> bool:
+        now = time.monotonic()
+        with self._lock:
+            times = self._times[key]
+            times[:] = [t for t in times if now - t < 1]
+            if len(times) >= self._max:
+                return False
+            times.append(now)
+            return True
 
 class LocalSocksProxy:
-    def __init__(self, pool, host: str = "127.0.0.1", port: int = 1080):
+    def __init__(self, pool, host: str = "127.0.0.1", port: int = 10800, allowed_ips: set | None = None):
         self.pool = pool
         self.host = host
         self.port = port
         self._srv = None
         self._running = False
+        self._pool_exec = ThreadPoolExecutor(max_workers=MAX_WORKERS)
+        self._limiter = RateLimiter()
+        self._allowed = allowed_ips
 
     def start(self):
         self._srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._srv.bind((self.host, self.port))
-        self._srv.listen(50)
+        self._srv.listen(128)
         self._running = True
         log.info("SOCKS5 server listening on %s:%d", self.host, self.port)
 
@@ -28,8 +51,13 @@ class LocalSocksProxy:
                 conn, addr = self._srv.accept()
             except OSError:
                 break
-            t = threading.Thread(target=self._handle, args=(conn,), daemon=True)
-            t.start()
+            if self._allowed and addr[0] not in self._allowed:
+                conn.close()
+                continue
+            if not self._limiter.allow(addr[0]):
+                conn.close()
+                continue
+            self._pool_exec.submit(self._handle, conn)
 
     def stop(self):
         self._running = False
@@ -38,6 +66,7 @@ class LocalSocksProxy:
                 self._srv.close()
             except OSError:
                 pass
+        self._pool_exec.shutdown(wait=False)
 
     def _handle(self, conn: socket.socket):
         try:

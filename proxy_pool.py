@@ -5,6 +5,7 @@ import socket
 import ssl
 import urllib.request
 import urllib.error
+import ipaddress
 from utils import log
 
 SOURCES = [
@@ -12,6 +13,30 @@ SOURCES = [
     "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt",
     "https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS5_RAW.txt",
 ]
+
+_PRIVATE_RANGES = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("224.0.0.0/4"),
+    ipaddress.ip_network("240.0.0.0/4"),
+]
+
+def _is_private_ip(host: str) -> bool:
+    try:
+        addr = ipaddress.ip_address(host)
+        return any(addr in net for net in _PRIVATE_RANGES)
+    except ValueError:
+        return True
+
+def _redact(host: str) -> str:
+    parts = host.split(".")
+    if len(parts) == 4:
+        return f"{parts[0]}.{parts[1]}.*.*"
+    return host
 
 class ProxyPool:
     def __init__(self, interval: int = 180):
@@ -33,15 +58,17 @@ class ProxyPool:
                 parts = line.split(":")
                 if len(parts) == 2:
                     try:
-                        out.append((parts[0], int(parts[1])))
+                        host = parts[0]
+                        if _is_private_ip(host):
+                            log.debug("Skipping private proxy %s", _redact(host))
+                            continue
+                        out.append((host, int(parts[1])))
                     except ValueError:
                         pass
         return out
 
     def _fetch(self) -> list[tuple[str, int]]:
         ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
         all_proxies: list[tuple[str, int]] = []
         for url in SOURCES:
             try:
@@ -58,7 +85,7 @@ class ProxyPool:
     def _check(self, host: str, port: int, timeout: int = 8) -> bool:
         try:
             s = socks.socksocket()
-            s.settimeout(timeout)
+            s.settimeout(timeout + random.uniform(0, 1))
             s.set_proxy(socks.SOCKS5, host, port)
             s.connect(("8.8.8.8", 53))
             s.close()
@@ -76,7 +103,10 @@ class ProxyPool:
                     parts = line.split(":")
                     if len(parts) == 2:
                         try:
-                            raw.append((parts[0], int(parts[1])))
+                            host = parts[0]
+                            if _is_private_ip(host):
+                                continue
+                            raw.append((host, int(parts[1])))
                         except ValueError:
                             pass
         working = []
@@ -101,7 +131,7 @@ class ProxyPool:
             if self._check(h, p, timeout=6):
                 with lock:
                     working.append((h, p))
-                    log.debug("OK  %s:%d", h, p)
+                    log.debug("OK  %s", _redact(h))
         threads = []
         for h, p in to_check:
             t = threading.Thread(target=check, args=(h, p), daemon=True)
@@ -122,9 +152,27 @@ class ProxyPool:
         with self._lock:
             if not self._pool:
                 return None
-            self._idx = (self._idx + 1) % len(self._pool)
-            self._active = self._pool[self._idx]
-        log.info("Switched to proxy %s:%d", self._active[0], self._active[1])
+            pool_copy = list(self._pool)
+            start = self._idx
+        n = len(pool_copy)
+        for offset in range(1, n + 1):
+            idx = (start + offset) % n
+            h, p = pool_copy[idx]
+            if self._check(h, p, timeout=4):
+                with self._lock:
+                    self._idx = idx
+                    self._active = pool_copy[idx]
+                log.info("Switched to proxy %s", _redact(h))
+                for cb in self.on_switch:
+                    try:
+                        cb(self._active)
+                    except Exception as e:
+                        log.warning("on_switch callback error: %s", e)
+                return self._active
+        with self._lock:
+            self._idx = (start + 1) % n
+            self._active = pool_copy[self._idx]
+        log.warning("No alive proxy found, using pool default %s", _redact(self._active[0]))
         for cb in self.on_switch:
             try:
                 cb(self._active)

@@ -39,7 +39,8 @@ def _mac_network_services() -> list[str]:
     return [l.strip() for l in r.stdout.splitlines() if l.strip() and not l.startswith("*") and "disabled" not in l.lower()]
 
 def _cls():
-    os.system("cls" if PLATFORM == "win32" else "clear")
+    sys.stdout.write("\033[2J\033[H")
+    sys.stdout.flush()
 
 def _gradient(text: str, r1: int, g1: int, b1: int, r2: int, g2: int, b2: int) -> str:
     out = []
@@ -70,7 +71,7 @@ class Config:
     def __init__(self):
         self.mode = detect_default_mode()
         self.interval = 180
-        self.proxy_port = 1080
+        self.proxy_port = 10800
         self.proxy_file = None
         self.sys_proxy = False
         self.verbose = False
@@ -167,7 +168,7 @@ def about():
   Mode      │  TUN (Linux)   — system-wide VPN
             │  SOCKS (all)   — local proxy, configure apps
 
-  Version   │  v1.0.0
+  Version   │  v1.2.0
   License   │  MIT
   Repo      │  https://github.com/20player11/GhostVPN
 
@@ -225,7 +226,6 @@ def run_vpn(cfg: Config):
             tun.setup_iptables()
         except Exception as e:
             input(f"  Failed to set up routing: {e}. Press Enter...")
-            tun.cleanup()
             return
         proxy = TransProxy(pool, bind_port=cfg.proxy_port)
         proxy.start()
@@ -233,8 +233,11 @@ def run_vpn(cfg: Config):
         pool.start_auto_rotate()
         print(f"  [4/4] VPN is LIVE! Rotating every {cfg.interval}s")
         print(f"\n  ── Press Ctrl+C to stop ──\n")
+        _orig = signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)
         def cleanup(*_):
             pool.stop(); proxy.stop(); tun.cleanup(); stop_event.set()
+            signal.signal(signal.SIGINT, _orig[0])
+            signal.signal(signal.SIGTERM, _orig[1])
         signal.signal(signal.SIGINT, cleanup)
         signal.signal(signal.SIGTERM, cleanup)
         stop_event.wait()
@@ -254,10 +257,13 @@ def run_vpn(cfg: Config):
         print(f"\n  VPN is LIVE! Rotating IP every {cfg.interval}s")
         print(f"  Configure your apps → SOCKS5 127.0.0.1:{cfg.proxy_port}")
         print(f"\n  ── Press Ctrl+C to stop ──\n")
+        _orig = signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)
         def cleanup(*_):
             pool.stop(); local.stop()
             if cfg.sys_proxy:
                 set_system_proxy("127.0.0.1", cfg.proxy_port, enabled=False)
+            signal.signal(signal.SIGINT, _orig[0])
+            signal.signal(signal.SIGTERM, _orig[1])
             stop_event.set()
         signal.signal(signal.SIGINT, cleanup)
         signal.signal(signal.SIGTERM, cleanup)
@@ -285,7 +291,7 @@ Usage:
 CLI options:
   --mode tun|socks           TUN (Linux) or SOCKS proxy
   --interval SECONDS         Rotation interval (default: 180)
-  --proxy-port PORT          Local SOCKS port (default: 1080)
+  --proxy-port PORT          Local SOCKS port (default: 10800)
   --proxies FILE             Custom proxy list file
   --sys-proxy                Auto-set system proxy (macOS/Windows)
   --verbose                  Debug output

@@ -1,10 +1,18 @@
 import logging
+import random
 import socket
 import struct
 import sys
 
 log = logging.getLogger("vpn")
 SO_ORIGINAL_DST = 80
+
+IP_SERVICES = [
+    ("ifconfig.me", "/ip"),
+    ("api.ipify.org", "/"),
+    ("checkip.amazonaws.com", "/"),
+    ("icanhazip.com", "/"),
+]
 
 def setup_log(verbose: bool):
     level = logging.DEBUG if verbose else logging.INFO
@@ -24,6 +32,7 @@ def get_orig_dst(sock: socket.socket) -> tuple[str, int]:
 
 def current_ip(proxy: tuple[str, int] | None = None, timeout: int = 10) -> str | None:
     import socks
+    host, path = random.choice(IP_SERVICES)
     s = None
     try:
         if proxy:
@@ -32,8 +41,8 @@ def current_ip(proxy: tuple[str, int] | None = None, timeout: int = 10) -> str |
         else:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(timeout)
-        s.connect(("ifconfig.me", 80))
-        s.sendall(b"GET /ip HTTP/1.0\r\nHost: ifconfig.me\r\nConnection: close\r\n\r\n")
+        s.connect((host, 80))
+        s.sendall(f"GET {path} HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\n\r\n".encode())
         data = b""
         while True:
             chunk = s.recv(4096)
@@ -43,7 +52,7 @@ def current_ip(proxy: tuple[str, int] | None = None, timeout: int = 10) -> str |
         body = data.split(b"\r\n\r\n", 1)[-1]
         return body.decode().strip()
     except Exception as e:
-        log.debug("IP lookup failed: %s", e)
+        log.debug("IP lookup via %s failed: %s", host, e)
         return None
     finally:
         if s:

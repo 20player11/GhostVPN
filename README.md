@@ -27,7 +27,7 @@ Your browser ──▶ tun0 ──▶ │ iptables REDIRECT    │
 Two modes:
 
 - **TUN mode** (Linux) — system-wide VPN using `tun` + `iptables`. All TCP traffic goes through the proxy automatically.
-- **SOCKS mode** (Linux, macOS, Windows) — local SOCKS5 proxy on `127.0.0.1:1080`. Configure your apps or system proxy to use it.
+- **SOCKS mode** (Linux, macOS, Windows) — local SOCKS5 proxy on `127.0.0.1:10800`. Configure your apps or system proxy to use it.
 
 ## Quick start
 
@@ -63,7 +63,7 @@ python3 vpn.py
 python3 vpn.py --cli --mode socks --sys-proxy
 ```
 
-Configure your browser to use SOCKS5 `127.0.0.1:1080`, or let GhostVPN set the system proxy automatically.
+Configure your browser to use SOCKS5 `127.0.0.1:10800`, or let GhostVPN set the system proxy automatically.
 
 ### Windows (SOCKS mode)
 
@@ -98,7 +98,7 @@ Run `python vpn.py` to see:
   MAIN MENU
 
      [1] ▶  START VPN  (TUN (Linux))
-         interval=180s  port=1080
+          interval=180s  port=10800
 
      [2] Settings
      [3] About
@@ -123,7 +123,7 @@ python vpn.py --cli [options]
 | `--mode`       | `tun` (Linux), `socks` (else) | `tun` = system VPN (Linux), `socks` = local proxy |
 | `--interval`   | `180`                         | Seconds between IP rotations                      |
 | `--proxies`    | `—`                           | Path to custom proxy list (`host:port` per line)  |
-| `--proxy-port` | `1080`                        | Local SOCKS proxy port (socks mode)               |
+| `--proxy-port` | `10800`                       | Local SOCKS proxy port (socks mode)               |
 | `--sys-proxy`  | `off`                         | Automatically set system proxy (macOS/Windows)    |
 | `--verbose`    | `off`                         | Debug-level logs                                  |
 
@@ -158,6 +158,13 @@ GhostVPN has the following security features enabled:
 - **Dependabot security fixes** — auto-generated PRs for patched dependencies
 - **CodeQL code scanning** — runs on every push/PR via GitHub Actions
 - **SECURITY.md** — disclosure policy with 24h/7d/30d response timeline
+
+### Known limitations
+
+- **Encryption** — GhostVPN does not encrypt traffic end-to-end. SOCKS5 proxies see plaintext data. Use HTTPS/TLS for sensitive traffic.
+- **Privilege separation** — The VPN runs in a single process. No sandboxing or seccomp is applied.
+- **DNS** — DNS queries are resolved locally and may leak. Use a DNS-over-HTTPS client for full coverage.
+- **IPv6** — IPv6 traffic is blocked in TUN mode to prevent leaks. SOCKS mode only handles IPv4.
 
 ## Project structure
 

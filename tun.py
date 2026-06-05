@@ -11,7 +11,7 @@ IFF_NO_PI = 0x1000
 TUN_IP = "10.0.0.1"
 TUN_NET = "10.0.0.0/24"
 PROXY_PORT = 12345
-BYPASS_MARK = 1
+BYPASS_MARK = 888
 
 class TunManager:
     def __init__(self, name: str = "tun0"):
@@ -20,6 +20,7 @@ class TunManager:
         self._orig_gw = None
         self._orig_iface = None
         self._rules_added = False
+        self._iptables_added = False
 
     def create(self):
         if not os.path.exists("/dev/net/tun"):
@@ -44,16 +45,20 @@ class TunManager:
 
     def setup_routing(self):
         self._save_orig_gw()
-        self._run("ip", "addr", "add", TUN_IP + "/24", "dev", self.name)
-        self._run("ip", "link", "set", self.name, "up")
-        via = TUN_IP
-        self._run("ip", "route", "add", TUN_NET, "dev", self.name, "table", "100")
-        self._run("ip", "route", "add", "default", "via", via, "dev", self.name, "table", "100")
-        self._run("ip", "rule", "add", "fwmark", str(BYPASS_MARK), "table", "main", "pref", "1000")
-        self._run("ip", "rule", "add", "table", "100", "pref", "20000")
-        self._rules_added = True
-        self._run("ip", "route", "flush", "cache")
-        log.info("Routing: default via %s dev %s (table 100), fwmark %d bypasses", via, self.name, BYPASS_MARK)
+        try:
+            self._run("ip", "addr", "add", TUN_IP + "/24", "dev", self.name)
+            self._run("ip", "link", "set", self.name, "up")
+            via = TUN_IP
+            self._run("ip", "route", "add", TUN_NET, "dev", self.name, "table", "100")
+            self._run("ip", "route", "add", "default", "via", via, "dev", self.name, "table", "100")
+            self._run("ip", "rule", "add", "fwmark", str(BYPASS_MARK), "table", "main", "pref", "1000")
+            self._run("ip", "rule", "add", "table", "100", "pref", "20000")
+            self._rules_added = True
+            self._run("ip", "route", "flush", "cache")
+            log.info("Routing: default via %s dev %s (table 100), fwmark %d bypasses", via, self.name, BYPASS_MARK)
+        except Exception:
+            self.cleanup()
+            raise
 
     def _save_orig_gw(self):
         r = subprocess.run(
@@ -72,17 +77,29 @@ class TunManager:
                 log.warning("Could not parse default route: %s", r.stdout.strip())
 
     def setup_iptables(self):
-        self._run("iptables", "-t", "nat", "-A", "OUTPUT", "-p", "tcp",
-                   "-d", "127.0.0.0/8", "-j", "RETURN")
-        self._run("iptables", "-t", "nat", "-A", "OUTPUT", "-p", "tcp",
-                   "-m", "mark", "--mark", str(BYPASS_MARK), "-j", "RETURN")
-        self._run("iptables", "-t", "nat", "-A", "OUTPUT", "-p", "tcp",
-                   "-j", "REDIRECT", "--to-port", str(PROXY_PORT))
-        log.info("iptables: redirect TCP -> %d", PROXY_PORT)
+        try:
+            self._run("iptables", "-t", "nat", "-A", "OUTPUT", "-p", "tcp",
+                       "-d", "127.0.0.0/8", "-j", "RETURN")
+            self._run("iptables", "-t", "nat", "-A", "OUTPUT", "-p", "tcp",
+                       "-m", "mark", "--mark", str(BYPASS_MARK), "-j", "RETURN")
+            self._run("iptables", "-t", "nat", "-A", "OUTPUT", "-p", "tcp",
+                       "-j", "REDIRECT", "--to-port", str(PROXY_PORT))
+            self._run("ip6tables", "-A", "OUTPUT", "-o", "lo", "-j", "ACCEPT", check=False)
+            self._run("ip6tables", "-A", "OUTPUT", "-p", "tcp", "-j", "REJECT", "--reject-with", "tcp-reset", check=False)
+            self._run("ip6tables", "-A", "OUTPUT", "-j", "DROP", check=False)
+            self._iptables_added = True
+            log.info("iptables: redirect TCP -> %d, IPv6 blocked", PROXY_PORT)
+        except Exception:
+            self.cleanup()
+            raise
 
     def cleanup(self):
         log.info("Cleaning up...")
         try:
+            if self._iptables_added:
+                self._run("ip6tables", "-D", "OUTPUT", "-o", "lo", "-j", "ACCEPT", check=False)
+                self._run("ip6tables", "-D", "OUTPUT", "-p", "tcp", "-j", "REJECT", "--reject-with", "tcp-reset", check=False)
+                self._run("ip6tables", "-D", "OUTPUT", "-j", "DROP", check=False)
             self._run("iptables", "-t", "nat", "-D", "OUTPUT", "-p", "tcp",
                        "-d", "127.0.0.0/8", "-j", "RETURN", check=False)
             self._run("iptables", "-t", "nat", "-D", "OUTPUT", "-p", "tcp",
