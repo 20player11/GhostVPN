@@ -40,15 +40,35 @@ def _mac_network_services() -> list[str]:
 def _cls():
     os.system("cls" if PLATFORM == "win32" else "clear")
 
-LOGO = r"""
-                 ____ _               _   ____   ______  _   __
-                / ___| |__   ___  ___| |_|  _ \ / __ \ \| | / /
-               | |  _| '_ \ / _ \/ __| __| |_) | |  | \   |/ /
-               | |_| | | | | (_) \__ \ |_|  __/| |__| ||   <
-                \____|_| |_|\___/|___/\__|_|    \____/|_|\_\
+def _gradient(text: str, r1: int, g1: int, b1: int, r2: int, g2: int, b2: int) -> str:
+    out = []
+    chars = list(text)
+    n = len(chars)
+    for i, ch in enumerate(chars):
+        t = i / max(n - 1, 1)
+        r = int(r1 + (r2 - r1) * t)
+        g = int(g1 + (g2 - g1) * t)
+        b = int(b1 + (b2 - b1) * t)
+        out.append(f"\033[38;2;{r};{g};{b}m{ch}")
+    out.append("\033[0m")
+    return "".join(out)
 
-                        👻  ROTATING IP VPN  👻
-"""
+def _print_logo():
+    logo_lines = [
+        "  ██████  ██   ██  ██████  ███████  ██████  ██    ██ ██████  ███    ██ ",
+        " ██       ██   ██ ██    ██ ██      ██    ██ ██    ██ ██   ██ ████   ██ ",
+        " ██   ███ ███████ ██    ██ █████   ██    ██ ██    ██ ██████  ██ ██  ██ ",
+        " ██    ██ ██   ██ ██    ██ ██      ██    ██ ██    ██ ██   ██ ██  ██ ██ ",
+        "  ██████  ██   ██  ██████  ██       ██████   ██████  ██   ██ ██   ████ ",
+    ]
+    for i, line in enumerate(logo_lines):
+        t = i / max(len(logo_lines) - 1, 1)
+        r = int(40 + (160 - 40) * t)
+        g = int(200 + (50 - 200) * t)
+        b = int(255 + (255 - 255) * t)
+        print(f"\033[38;2;{r};{g};{b}m{line}\033[0m")
+    print(_gradient("              👻  ROTATING IP VPN  👻", 0, 200, 255, 180, 50, 255))
+    print()
 
 class Config:
     def __init__(self):
@@ -64,7 +84,7 @@ class Config:
 
 def menu(header: str, opts: list[tuple[str, str]]) -> str:
     _cls()
-    print(LOGO)
+    _print_logo()
     print(f"  {header}\n")
     for i, (label, desc) in enumerate(opts, 1):
         print(f"     [{i}] {label}")
@@ -94,7 +114,7 @@ def main_menu(cfg: Config):
         elif c == "3":
             about()
         elif c == "4":
-            _cls(); print(LOGO); print("\n  Goodbye! 👻\n"); sys.exit(0)
+            _cls(); _print_logo(); print("\n  Goodbye! 👻\n"); sys.exit(0)
 
 def settings_menu(cfg: Config):
     mode_opts = [("tun", "TUN — full system VPN (Linux only)"), ("socks", "SOCKS — local proxy, cross-platform")]
@@ -141,7 +161,7 @@ def settings_menu(cfg: Config):
 
 def about():
     _cls()
-    print(LOGO)
+    _print_logo()
     print("""
   GhostVPN 👻
 
@@ -168,7 +188,7 @@ def run_vpn(cfg: Config):
         return
 
     _cls()
-    print(LOGO)
+    _print_logo()
     print(f"  Starting VPN in {cfg.mode_label()} mode...\n")
 
     setup_log(cfg.verbose)
