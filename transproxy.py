@@ -27,10 +27,11 @@ class RateLimiter:
             return True
 
 class TransProxy:
-    def __init__(self, pool, bind_port: int = 12345, bind_host: str = "127.0.0.1", allowed_ips: set | None = None):
+    def __init__(self, pool, bind_port: int = 12345, bind_host: str = "127.0.0.1", allowed_ips: set | None = None, kill_switch: bool = False):
         self.pool = pool
         self.bind_port = bind_port
         self.bind_host = bind_host
+        self.kill_switch = kill_switch
         self._srv = None
         self._running = False
         self._pool_exec = ThreadPoolExecutor(max_workers=MAX_WORKERS)
@@ -122,6 +123,9 @@ class TransProxy:
                     proxy = self.pool.mark_failed()
                     if not proxy:
                         break
+            if self.kill_switch:
+                log.warning("Kill-switch active, dropping %s:%d", dst_host, dst_port)
+                return
             log.warning("All proxies failed for %s:%d, connecting directly", dst_host, dst_port)
             up = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             up.setsockopt(socket.SOL_SOCKET, socket.SO_MARK, BYPASS_MARK)

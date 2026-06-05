@@ -75,6 +75,7 @@ class Config:
         self.proxy_file = None
         self.sys_proxy = False
         self.verbose = False
+        self.kill_switch = False
 
     def mode_label(self):
         return f"TUN (Linux)" if self.mode == "tun" else "SOCKS (cross-platform)"
@@ -119,12 +120,14 @@ def settings_menu(cfg: Config):
         mode = cfg.mode_label()
         src = f"auto-fetch ({PLATFORM_OS})" if not cfg.proxy_file else f"custom ({cfg.proxy_file})"
         sp = "ON" if cfg.sys_proxy else "OFF"
+        ks = "ON" if cfg.kill_switch else "OFF"
         c = menu("SETTINGS", [
             (f"Mode:             {mode}", ""),
             (f"Rotation interval: {cfg.interval}s", ""),
             (f"Proxy port:        {cfg.proxy_port}", ""),
             (f"Proxy source:      {src}", ""),
             (f"System proxy:      {sp}", "(macOS/Windows only)"),
+            (f"Kill switch:       {ks}", "(block if no proxies work)"),
             ("Back", ""),
         ])
         if c == "1":
@@ -154,6 +157,8 @@ def settings_menu(cfg: Config):
         elif c == "5":
             cfg.sys_proxy = not cfg.sys_proxy
         elif c == "6":
+            cfg.kill_switch = not cfg.kill_switch
+        elif c == "7":
             return
 
 def about():
@@ -213,6 +218,7 @@ def run_vpn(cfg: Config):
     if cfg.mode == "tun":
         from tun import TunManager, PROXY_PORT
         from transproxy import TransProxy
+        from dns import DnsProxy
         print(f"  [3/4] Setting up TUN device and routing...")
         tun = TunManager()
         try:
@@ -226,15 +232,18 @@ def run_vpn(cfg: Config):
         except Exception as e:
             input(f"  Failed to set up routing: {e}. Press Enter...")
             return
-        proxy = TransProxy(pool, bind_port=PROXY_PORT)
+        proxy = TransProxy(pool, bind_port=PROXY_PORT, kill_switch=cfg.kill_switch)
         proxy.start()
         threading.Thread(target=proxy.serve, daemon=True).start()
+        dns = DnsProxy(pool)
+        dns.start()
+        threading.Thread(target=dns.serve, daemon=True).start()
         pool.start_auto_rotate()
         print(f"  [4/4] VPN is LIVE! Rotating every {cfg.interval}s")
         print(f"\n  ── Press Ctrl+C to stop ──\n")
         _orig = signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)
         def cleanup(*_):
-            pool.stop(); proxy.stop(); tun.cleanup(); stop_event.set()
+            pool.stop(); proxy.stop(); dns.stop(); tun.cleanup(); stop_event.set()
             signal.signal(signal.SIGINT, _orig[0])
             signal.signal(signal.SIGTERM, _orig[1])
         signal.signal(signal.SIGINT, cleanup)
@@ -277,6 +286,7 @@ def main():
     ap.add_argument("--proxies", type=str)
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--sys-proxy", action="store_true")
+    ap.add_argument("--kill-switch", action="store_true", help="drop connections when all proxies fail (prevent IP leak)")
     ap.add_argument("-h", "--help", action="store_true")
     args, _ = ap.parse_known_args()
 
@@ -293,6 +303,7 @@ CLI options:
   --proxy-port PORT          Local SOCKS port (default: 10800)
   --proxies FILE             Custom proxy list file
   --sys-proxy                Auto-set system proxy (macOS/Windows)
+  --kill-switch              Drop connections when all proxies fail
   --verbose                  Debug output
   -h, --help                 This help
 """)
@@ -305,6 +316,7 @@ CLI options:
         if args.proxy_port: cfg.proxy_port = args.proxy_port
         if args.proxies: cfg.proxy_file = args.proxies
         if args.sys_proxy: cfg.sys_proxy = True
+        if args.kill_switch: cfg.kill_switch = True
         if args.verbose: cfg.verbose = True
         run_vpn(cfg)
     else:

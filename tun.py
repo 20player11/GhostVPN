@@ -84,13 +84,15 @@ class TunManager:
                        "-m", "mark", "--mark", str(BYPASS_MARK), "-j", "RETURN")
             self._run("iptables", "-t", "nat", "-A", "OUTPUT", "-p", "tcp",
                        "-j", "REDIRECT", "--to-port", str(PROXY_PORT))
+            self._run("iptables", "-t", "nat", "-A", "OUTPUT", "-p", "udp", "--dport", "53",
+                       "-j", "REDIRECT", "--to-port", "5353")
             self._run("iptables", "-A", "OUTPUT", "-p", "udp", "--dport", "443",
                        "-j", "REJECT", "--reject-with", "icmp-port-unreachable")
             self._run("ip6tables", "-A", "OUTPUT", "-o", "lo", "-j", "ACCEPT", check=False)
             self._run("ip6tables", "-A", "OUTPUT", "-p", "tcp", "-j", "REJECT", "--reject-with", "tcp-reset", check=False)
             self._run("ip6tables", "-A", "OUTPUT", "-j", "DROP", check=False)
             self._iptables_added = True
-            log.info("iptables: redirect TCP -> %d, QUIC blocked, IPv6 blocked", PROXY_PORT)
+            log.info("iptables: redirect TCP -> %d, DNS -> 5353, QUIC blocked, IPv6 blocked", PROXY_PORT)
         except Exception:
             self.cleanup()
             raise
@@ -108,6 +110,8 @@ class TunManager:
                        "-m", "mark", "--mark", str(BYPASS_MARK), "-j", "RETURN", check=False)
             self._run("iptables", "-t", "nat", "-D", "OUTPUT", "-p", "tcp",
                        "-j", "REDIRECT", "--to-port", str(PROXY_PORT), check=False)
+            self._run("iptables", "-t", "nat", "-D", "OUTPUT", "-p", "udp", "--dport", "53",
+                       "-j", "REDIRECT", "--to-port", "5353", check=False)
             self._run("iptables", "-D", "OUTPUT", "-p", "udp", "--dport", "443",
                        "-j", "REJECT", "--reject-with", "icmp-port-unreachable", check=False)
         except Exception as e:
