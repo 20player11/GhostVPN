@@ -4,35 +4,27 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from utils import log, setup_log, current_ip
 from proxy_pool import ProxyPool
 
 PLATFORM = sys.platform
+PLATFORM_OS = {"linux": "Linux", "darwin": "macOS", "win32": "Windows"}.get(PLATFORM, PLATFORM)
 
 def detect_default_mode() -> str:
-    if PLATFORM == "linux":
-        return "tun"
-    return "socks"
+    return "tun" if PLATFORM == "linux" else "socks"
 
 def set_system_proxy(host: str, port: int, enabled: bool):
     if PLATFORM == "darwin":
         for svc in _mac_network_services():
             state = "on" if enabled else "off"
-            subprocess.run(
-                ["networksetup", "-setsocksfirewallproxystate", svc, state],
-                check=False, capture_output=True
-            )
+            subprocess.run(["networksetup", "-setsocksfirewallproxystate", svc, state], check=False, capture_output=True)
             if enabled:
-                subprocess.run(
-                    ["networksetup", "-setsocksfirewallproxy", svc, host, str(port)],
-                    check=False, capture_output=True
-                )
+                subprocess.run(["networksetup", "-setsocksfirewallproxy", svc, host, str(port)], check=False, capture_output=True)
         log.info("macOS system proxy %s", "enabled" if enabled else "disabled")
     elif PLATFORM == "win32":
         import winreg
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
-                              r"Software\Microsoft\Windows\CurrentVersion\Internet Settings",
-                              0, winreg.KEY_SET_VALUE)
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Internet Settings", 0, winreg.KEY_SET_VALUE)
         if enabled:
             winreg.SetValueEx(key, "ProxyServer", 0, winreg.REG_SZ, f"socks={host}:{port}")
             winreg.SetValueEx(key, "ProxyEnable", 0, winreg.REG_DWORD, 1)
@@ -42,135 +34,261 @@ def set_system_proxy(host: str, port: int, enabled: bool):
         log.info("Windows system proxy %s", "enabled" if enabled else "disabled")
 
 def _mac_network_services() -> list[str]:
-    r = subprocess.run(
-        ["networksetup", "-listallnetworkservices"],
-        capture_output=True, text=True, check=False
-    )
-    services = []
-    for line in r.stdout.splitlines():
-        line = line.strip()
-        if line and not line.startswith("*") and line != "An asterisk (*) denotes that a network service is disabled.":
-            services.append(line)
-    return services
+    r = subprocess.run(["networksetup", "-listallnetworkservices"], capture_output=True, text=True, check=False)
+    return [l.strip() for l in r.stdout.splitlines() if l.strip() and not l.startswith("*") and "disabled" not in l.lower()]
 
-def main():
-    ap = argparse.ArgumentParser(description="GhostVPN — rotating-IP VPN via SOCKS5 proxy pool")
-    ap.add_argument("--mode", choices=["tun", "socks"], default=detect_default_mode(),
-                    help=f"VPN mode (default: {detect_default_mode()})")
-    ap.add_argument("--interval", type=int, default=180, help="IP rotation interval in seconds (default: 180)")
-    ap.add_argument("--verbose", action="store_true", help="verbose output")
-    ap.add_argument("--proxies", type=str, help="path to custom proxy list (one per line, host:port)")
-    ap.add_argument("--proxy-port", type=int, default=1080,
-                    help="Local SOCKS proxy port (default: 1080, socks mode only)")
-    ap.add_argument("--sys-proxy", action="store_true",
-                    help="Automatically set system proxy settings (macOS/Windows)")
-    args = ap.parse_args()
+def _cls():
+    os.system("cls" if PLATFORM == "win32" else "clear")
 
-    if args.mode == "tun" and PLATFORM != "linux":
-        log.error("TUN mode is Linux-only. Use --mode socks on this platform.")
-        sys.exit(1)
+LOGO = r"""
+                 ____ _               _   ____   ______  _   __
+                / ___| |__   ___  ___| |_|  _ \ / __ \ \| | / /
+               | |  _| '_ \ / _ \/ __| __| |_) | |  | \   |/ /
+               | |_| | | | | (_) \__ \ |_|  __/| |__| ||   <
+                \____|_| |_|\___/|___/\__|_|    \____/|_|\_\
 
-    setup_log(args.verbose)
-    pool = ProxyPool(interval=args.interval)
+                        👻  ROTATING IP VPN  👻
+"""
 
-    log.info("Building proxy pool...")
-    if args.proxies:
-        pool.load_file(args.proxies)
+class Config:
+    def __init__(self):
+        self.mode = detect_default_mode()
+        self.interval = 180
+        self.proxy_port = 1080
+        self.proxy_file = None
+        self.sys_proxy = False
+        self.verbose = False
+
+    def mode_label(self):
+        return f"TUN (Linux)" if self.mode == "tun" else "SOCKS (cross-platform)"
+
+def menu(header: str, opts: list[tuple[str, str]]) -> str:
+    _cls()
+    print(LOGO)
+    print(f"  {header}\n")
+    for i, (label, desc) in enumerate(opts, 1):
+        print(f"     [{i}] {label}")
+        if desc:
+            print(f"         {desc}")
+    print()
+    try:
+        c = input("  └─ Choice: ").strip()
+        return str(int(c))
+    except (ValueError, IndexError):
+        return ""
+
+def main_menu(cfg: Config):
+    basic_opts = [
+        (f"▶  START VPN  ({cfg.mode_label()})", ""),
+        ("Settings", f"interval={cfg.interval}s  port={cfg.proxy_port}"),
+        ("About", ""),
+        ("Exit", ""),
+    ]
+    while True:
+        c = menu("MAIN MENU", basic_opts)
+        if c == "1":
+            run_vpn(cfg)
+            input("\n  └─ Press Enter to return...")
+        elif c == "2":
+            settings_menu(cfg)
+        elif c == "3":
+            about()
+        elif c == "4":
+            _cls(); print(LOGO); print("\n  Goodbye! 👻\n"); sys.exit(0)
+
+def settings_menu(cfg: Config):
+    mode_opts = [("tun", "TUN — full system VPN (Linux only)"), ("socks", "SOCKS — local proxy, cross-platform")]
+    while True:
+        mode = cfg.mode_label()
+        src = f"auto-fetch ({PLATFORM_OS})" if not cfg.proxy_file else f"custom ({cfg.proxy_file})"
+        sp = "ON" if cfg.sys_proxy else "OFF"
+        c = menu("SETTINGS", [
+            (f"Mode:             {mode}", ""),
+            (f"Rotation interval: {cfg.interval}s", ""),
+            (f"Proxy port:        {cfg.proxy_port}", ""),
+            (f"Proxy source:      {src}", ""),
+            (f"System proxy:      {sp}", "(macOS/Windows only)"),
+            ("Back", ""),
+        ])
+        if c == "1":
+            n = menu("SELECT MODE", mode_opts)
+            if n in ("1", "2"):
+                cfg.mode = mode_opts[int(n) - 1][0]
+                if cfg.mode == "tun" and PLATFORM != "linux":
+                    input("  TUN mode is Linux-only. Press Enter...")
+                    cfg.mode = "socks"
+        elif c == "2":
+            try:
+                v = int(input(f"  Interval in seconds [{cfg.interval}]: ").strip() or cfg.interval)
+                if v >= 10:
+                    cfg.interval = v
+            except ValueError:
+                pass
+        elif c == "3":
+            try:
+                v = int(input(f"  Proxy port [{cfg.proxy_port}]: ").strip() or cfg.proxy_port)
+                if 0 < v < 65536:
+                    cfg.proxy_port = v
+            except ValueError:
+                pass
+        elif c == "4":
+            p = input(f"  Proxy file path (empty = auto-fetch) [{cfg.proxy_file or ''}]: ").strip()
+            cfg.proxy_file = p if p else None
+        elif c == "5":
+            cfg.sys_proxy = not cfg.sys_proxy
+        elif c == "6":
+            return
+
+def about():
+    _cls()
+    print(LOGO)
+    print("""
+  GhostVPN 👻
+
+  A rotating-IP VPN that routes your traffic through a
+  pool of free SOCKS5 proxies. No paid APIs.
+
+  Mode      │  TUN (Linux)   — system-wide VPN
+            │  SOCKS (all)   — local proxy, configure apps
+
+  Version   │  v1.0.0
+  License   │  MIT
+  Repo      │  https://github.com/20player11/GhostVPN
+
+  Press any key to return.
+""")
+    try:
+        input()
+    except:
+        pass
+
+def run_vpn(cfg: Config):
+    if cfg.mode == "tun" and PLATFORM != "linux":
+        input("  TUN mode not available on this platform. Press Enter...")
+        return
+
+    _cls()
+    print(LOGO)
+    print(f"  Starting VPN in {cfg.mode_label()} mode...\n")
+
+    setup_log(cfg.verbose)
+    pool = ProxyPool(interval=cfg.interval)
+
+    print(f"  [1/4] Building proxy pool...")
+    if cfg.proxy_file:
+        pool.load_file(cfg.proxy_file)
     else:
         pool.refresh()
 
     if pool.get() is None:
-        log.error("No working proxies found. Exiting.")
-        sys.exit(1)
+        input("  No working proxies found. Press Enter...")
+        return
 
     ip = current_ip(pool.get())
-    log.info("Current IP through proxy: %s", ip or "unknown")
+    print(f"  [2/4] Exit IP through proxy: {ip or 'unknown'}")
+
+    stop_event = threading.Event()
 
     def on_switch(proxy):
         ip = current_ip(proxy)
         log.info("New IP: %s", ip or "unknown")
     pool.on_switch.append(on_switch)
 
-    if args.mode == "tun":
+    if cfg.mode == "tun":
         from tun import TunManager
         from transproxy import TransProxy
-
+        print(f"  [3/4] Setting up TUN device and routing...")
         tun = TunManager()
         try:
             tun.create()
         except Exception as e:
-            log.error("Failed to create tun: %s", e)
-            sys.exit(1)
+            input(f"  Failed to create tun: {e}. Press Enter...")
+            return
         try:
             tun.setup_routing()
             tun.setup_iptables()
         except Exception as e:
-            log.error("Failed to set up routing/iptables: %s", e)
+            input(f"  Failed to set up routing: {e}. Press Enter...")
             tun.cleanup()
-            sys.exit(1)
-        log.info("Routing and iptables configured")
-
-        proxy = TransProxy(pool, bind_port=args.proxy_port)
+            return
+        proxy = TransProxy(pool, bind_port=cfg.proxy_port)
         proxy.start()
-        srv_thread = threading.Thread(target=proxy.serve, daemon=True)
-        srv_thread.start()
-
+        threading.Thread(target=proxy.serve, daemon=True).start()
         pool.start_auto_rotate()
-
-        log.info("TUN mode — full system VPN running. Rotating IP every %d s. Ctrl+C to stop.", args.interval)
-
-        stop = threading.Event()
-
+        print(f"  [4/4] VPN is LIVE! Rotating every {cfg.interval}s")
+        print(f"\n  ── Press Ctrl+C to stop ──\n")
         def cleanup(*_):
-            log.info("Shutting down...")
-            pool.stop()
-            proxy.stop()
-            tun.cleanup()
-            stop.set()
-
+            pool.stop(); proxy.stop(); tun.cleanup(); stop_event.set()
         signal.signal(signal.SIGINT, cleanup)
         signal.signal(signal.SIGTERM, cleanup)
-
-        try:
-            stop.wait()
-        except KeyboardInterrupt:
-            cleanup()
+        stop_event.wait()
 
     else:
         from local_proxy import LocalSocksProxy
-
-        local = LocalSocksProxy(pool, port=args.proxy_port)
+        print(f"  [3/4] Starting SOCKS5 proxy on 127.0.0.1:{cfg.proxy_port}...")
+        local = LocalSocksProxy(pool, port=cfg.proxy_port)
         local.start()
-        srv_thread = threading.Thread(target=local.serve, daemon=True)
-        srv_thread.start()
-
-        if args.sys_proxy:
-            set_system_proxy("127.0.0.1", args.proxy_port, enabled=True)
-
+        threading.Thread(target=local.serve, daemon=True).start()
+        if cfg.sys_proxy:
+            set_system_proxy("127.0.0.1", cfg.proxy_port, enabled=True)
+            print(f"  [4/4] System proxy configured")
+        else:
+            print(f"  [4/4] Done")
         pool.start_auto_rotate()
-        log.info("SOCKS mode — proxy on 127.0.0.1:%d. Rotating IP every %d s. Ctrl+C to stop.",
-                 args.proxy_port, args.interval)
-
-        if args.sys_proxy:
-            log.info("System proxy configured. Configure your OS or browser to use SOCKS5 127.0.0.1:%d", args.proxy_port)
-
-        stop = threading.Event()
-
+        print(f"\n  VPN is LIVE! Rotating IP every {cfg.interval}s")
+        print(f"  Configure your apps → SOCKS5 127.0.0.1:{cfg.proxy_port}")
+        print(f"\n  ── Press Ctrl+C to stop ──\n")
         def cleanup(*_):
-            log.info("Shutting down...")
-            pool.stop()
-            local.stop()
-            if args.sys_proxy:
-                set_system_proxy("127.0.0.1", args.proxy_port, enabled=False)
-            stop.set()
-
+            pool.stop(); local.stop()
+            if cfg.sys_proxy:
+                set_system_proxy("127.0.0.1", cfg.proxy_port, enabled=False)
+            stop_event.set()
         signal.signal(signal.SIGINT, cleanup)
         signal.signal(signal.SIGTERM, cleanup)
+        stop_event.wait()
 
-        try:
-            stop.wait()
-        except KeyboardInterrupt:
-            cleanup()
+def main():
+    ap = argparse.ArgumentParser(description="GhostVPN — rotating-IP VPN via SOCKS5 proxy pool", add_help=False)
+    ap.add_argument("--cli", action="store_true", help="use CLI mode instead of interactive menu")
+    ap.add_argument("--mode", choices=["tun", "socks"])
+    ap.add_argument("--interval", type=int)
+    ap.add_argument("--proxy-port", type=int)
+    ap.add_argument("--proxies", type=str)
+    ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--sys-proxy", action="store_true")
+    ap.add_argument("-h", "--help", action="store_true")
+    args, _ = ap.parse_known_args()
+
+    if args.help or args.cli:
+        print("""GhostVPN — rotating-IP VPN
+
+Usage:
+  python vpn.py              Interactive menu (default)
+  python vpn.py --cli ...    CLI mode (for scripts)
+
+CLI options:
+  --mode tun|socks           TUN (Linux) or SOCKS proxy
+  --interval SECONDS         Rotation interval (default: 180)
+  --proxy-port PORT          Local SOCKS port (default: 1080)
+  --proxies FILE             Custom proxy list file
+  --sys-proxy                Auto-set system proxy (macOS/Windows)
+  --verbose                  Debug output
+  -h, --help                 This help
+""")
+        return
+
+    if args.cli:
+        cfg = Config()
+        if args.mode: cfg.mode = args.mode
+        if args.interval: cfg.interval = args.interval
+        if args.proxy_port: cfg.proxy_port = args.proxy_port
+        if args.proxies: cfg.proxy_file = args.proxies
+        if args.sys_proxy: cfg.sys_proxy = True
+        if args.verbose: cfg.verbose = True
+        run_vpn(cfg)
+    else:
+        cfg = Config()
+        main_menu(cfg)
 
 if __name__ == "__main__":
     main()
