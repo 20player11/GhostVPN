@@ -1,17 +1,25 @@
 # GhostVPN Session State
 
-**Current version:** v1.3.1  
-**Last commit:** UX: config persistence and live status bar (`e6bbce8`)  
+**Current version:** v1.4.0  
+**Last commit:** SOCKS4/HTTP support, health checks, dead proxy eviction  
 **Remote:** origin/main at https://github.com/20player11/GhostVPN
 
 ## How to run
 
 ```bash
 cd /home/ondrej/Programming/Python/vpn
-sudo .venv/bin/python3 vpn.py --cli --mode tun --verbose
+sudo .venv/bin/python3 vpn.py --cli --mode tun   # add --verbose for debug output
 ```
 
 ## Implemented
+
+### v1.4.0 — Proxy type support, health checks, eviction
+
+- SOCKS4/HTTP proxy type support: pool stores `(host, port, type)` tuples
+- 3 new sources: TheSpeedX SOCKS4, TheSpeedX HTTP, monosans HTTP
+- Pre-emptive health checks: background thread tests 20 random proxies every 60s
+- Dead proxy eviction: proxies that fail 3+ times are removed from the pool entirely
+- Proxy type shown in status bar
 
 ### v1.3.1 — UX
 
@@ -56,12 +64,13 @@ sudo .venv/bin/python3 vpn.py --cli --mode tun --verbose
 
 Status display and config persistence — done in v1.3.1.
 
+### Closed (#25, #27, #30)
+
+Health check, eviction, and SOCKS4/HTTP support — done in v1.4.0.
+
 ### Open
 
-- **#25** — Pre-emptive proxy health check
 - **#26** — Adaptive rotation interval
-- **#27** — Dead proxy eviction from pool
-- **#30** — SOCKS4/HTTP proxy type support
 - **#31** — Split tunneling (CIDR allowlist)
 - **#32** — UDP relay over SOCKS5
 

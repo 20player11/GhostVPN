@@ -1,4 +1,5 @@
 import argparse
+import atexit
 import json
 import os
 import signal
@@ -84,7 +85,6 @@ class Config:
             "mode": self.mode, "interval": self.interval,
             "proxy_port": self.proxy_port, "proxy_file": self.proxy_file,
             "sys_proxy": self.sys_proxy, "kill_switch": self.kill_switch,
-            "verbose": self.verbose,
         }
         try:
             with open(CONFIG_PATH, "w") as f:
@@ -102,7 +102,6 @@ class Config:
             self.proxy_file = data.get("proxy_file", self.proxy_file)
             self.sys_proxy = data.get("sys_proxy", self.sys_proxy)
             self.kill_switch = data.get("kill_switch", self.kill_switch)
-            self.verbose = data.get("verbose", self.verbose)
         except:
             pass
 
@@ -203,7 +202,7 @@ def about():
   Mode      │  TUN (Linux)   — system-wide VPN
             │  SOCKS (all)   — local proxy, configure apps
 
-  Version   │  v1.2.0
+  Version   │  v1.4.0
   License   │  MIT
   Repo      │  https://github.com/20player11/GhostVPN
 
@@ -243,7 +242,7 @@ def run_vpn(cfg: Config):
 
     stop_event = threading.Event()
 
-    pool.on_switch.append(lambda p: log.info("Switched proxy — %s:%d", *p))
+    pool.on_switch.append(lambda p: log.debug("Switched proxy — %s:%d", *p))
 
     if cfg.mode == "tun":
         from tun import TunManager, PROXY_PORT
@@ -269,6 +268,7 @@ def run_vpn(cfg: Config):
         dns.start()
         threading.Thread(target=dns.serve, daemon=True).start()
         pool.start_auto_rotate()
+        pool.start_health_checks()
         CYAN = "\033[38;2;0;200;255m"
         YELLOW = "\033[38;2;255;220;80m"
         GREEN = "\033[38;2;100;255;100m"
@@ -284,10 +284,12 @@ def run_vpn(cfg: Config):
             while not stop_event.is_set():
                 active = pool.get()
                 host = "none"
+                ptype = ""
                 if active:
                     host = f"{active[0].split('.')[0]}.{active[0].split('.')[1]}.*.*"
+                    ptype = f" {active[2]}"
                 s = proxy.stats_line()
-                bar = f"  {BOLD}GHOSTVPN{RESET}  {CYAN}│{RESET}  {s}  {CYAN}│{RESET}  pool {GREEN}{pool.size()}{RESET}  {CYAN}│{RESET}  proxy {YELLOW}{host}{RESET}  "
+                bar = f"  {BOLD}GHOSTVPN{RESET}  {CYAN}│{RESET}  {s}  {CYAN}│{RESET}  pool {GREEN}{pool.size()}{RESET}  {CYAN}│{RESET}  proxy {YELLOW}{host}{ptype}{RESET}  "
                 if len(bar) >= cols:
                     bar = bar[:cols - 1]
                 else:
@@ -310,12 +312,13 @@ def run_vpn(cfg: Config):
             signal.signal(signal.SIGTERM, _orig[1])
         signal.signal(signal.SIGINT, cleanup)
         signal.signal(signal.SIGTERM, cleanup)
+        atexit.register(cleanup)
         stop_event.wait()
 
     else:
         from local_proxy import LocalSocksProxy
         print(f"  [3/4] Starting SOCKS5 proxy on 127.0.0.1:{cfg.proxy_port}...")
-        local = LocalSocksProxy(pool, port=cfg.proxy_port)
+        local = LocalSocksProxy(pool, port=cfg.proxy_port, kill_switch=cfg.kill_switch)
         local.start()
         threading.Thread(target=local.serve, daemon=True).start()
         if cfg.sys_proxy:
@@ -324,6 +327,7 @@ def run_vpn(cfg: Config):
         else:
             print(f"  [4/4] Done")
         pool.start_auto_rotate()
+        pool.start_health_checks()
         print(f"\n  VPN is LIVE! Rotating IP every {cfg.interval}s")
         print(f"  Configure your apps → SOCKS5 127.0.0.1:{cfg.proxy_port}")
         print(f"\n  ── Press Ctrl+C to stop ──\n")

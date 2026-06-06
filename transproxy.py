@@ -7,6 +7,7 @@ import time
 import socks
 from utils import log, get_orig_dst
 from tun import BYPASS_MARK
+from proxy_pool import PROXY_TYPE_MAP, SOCKS5
 
 MAX_WORKERS = 100
 
@@ -135,7 +136,8 @@ class TransProxy:
                     up = socks.socksocket()
                     up.setsockopt(socket.SOL_SOCKET, socket.SO_MARK, BYPASS_MARK)
                     up.settimeout(15)
-                    up.set_proxy(socks.SOCKS5, proxy[0], proxy[1])
+                    ptype = proxy[2] if len(proxy) > 2 else SOCKS5
+                    up.set_proxy(PROXY_TYPE_MAP[ptype], proxy[0], proxy[1])
                     log.debug("Trying proxy %s:%d for %s:%d", proxy[0], proxy[1], dst_host, dst_port)
                     up.connect((dst_host, dst_port))
                     self._pipe(conn, up)

@@ -4,6 +4,7 @@ import threading
 import socks as sockslib
 from utils import log
 from tun import BYPASS_MARK
+from proxy_pool import PROXY_TYPE_MAP, SOCKS5
 
 UPSTREAM = ("1.1.1.1", 53)
 
@@ -32,15 +33,31 @@ class DnsProxy:
                 break
 
     def _handle(self, data: bytes, addr: tuple[str, int]):
-        proxy = self.pool.get()
+        proxy = self.pool.get_for_dns()
         if not proxy:
-            log.debug("DNS: no proxy available")
+            log.debug("DNS: no suitable proxy, falling back to direct")
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_MARK, BYPASS_MARK)
+                s.settimeout(10)
+                s.sendto(data, UPSTREAM)
+                resp, _ = s.recvfrom(4096)
+                if resp:
+                    self._sock.sendto(resp, addr)
+            except Exception as e:
+                log.debug("DNS direct fallback error: %s", e)
+            finally:
+                try:
+                    s.close()
+                except:
+                    pass
             return
         try:
             up = sockslib.socksocket()
             up.setsockopt(socket.SOL_SOCKET, socket.SO_MARK, BYPASS_MARK)
             up.settimeout(10)
-            up.set_proxy(sockslib.SOCKS5, proxy[0], proxy[1])
+            ptype = proxy[2] if len(proxy) > 2 else SOCKS5
+            up.set_proxy(PROXY_TYPE_MAP[ptype], proxy[0], proxy[1])
             up.connect(UPSTREAM)
             up.sendall(struct.pack("!H", len(data)) + data)
             resp = b""

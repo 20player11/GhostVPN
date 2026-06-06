@@ -7,6 +7,7 @@ from collections import defaultdict
 import time
 import socks as sockslib
 from utils import log
+from proxy_pool import PROXY_TYPE_MAP, SOCKS5
 
 SOCKS_VERSION = 5
 MAX_WORKERS = 100
@@ -28,10 +29,11 @@ class RateLimiter:
             return True
 
 class LocalSocksProxy:
-    def __init__(self, pool, host: str = "127.0.0.1", port: int = 10800, allowed_ips: set | None = None):
+    def __init__(self, pool, host: str = "127.0.0.1", port: int = 10800, allowed_ips: set | None = None, kill_switch: bool = False):
         self.pool = pool
         self.host = host
         self.port = port
+        self.kill_switch = kill_switch
         self._srv = None
         self._running = False
         self._pool_exec = ThreadPoolExecutor(max_workers=MAX_WORKERS)
@@ -88,6 +90,8 @@ class LocalSocksProxy:
             proxy = self.pool.get()
             if not proxy:
                 log.warning("No proxy available")
+                if self.kill_switch:
+                    return
                 conn.sendall(struct.pack("BBB", SOCKS_VERSION, 1, 0))
                 return
             max_attempts = min(self.pool.size() or 5, 5)
@@ -96,7 +100,8 @@ class LocalSocksProxy:
                 try:
                     up = sockslib.socksocket()
                     up.settimeout(15)
-                    up.set_proxy(sockslib.SOCKS5, proxy[0], proxy[1])
+                    ptype = proxy[2] if len(proxy) > 2 else SOCKS5
+                    up.set_proxy(PROXY_TYPE_MAP[ptype], proxy[0], proxy[1])
                     up.connect((dst_addr, dst_port))
                     bnd = ("0.0.0.0", 0)
                     resp = struct.pack("BBB", SOCKS_VERSION, 0, 0) + struct.pack("BBBB", 1, *socket.inet_aton(bnd[0])) + struct.pack("!H", bnd[1])
