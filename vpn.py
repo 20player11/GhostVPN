@@ -16,7 +16,9 @@ CONFIG_PATH = os.path.expanduser("~/.ghostvpn_config")
 PLATFORM_OS = {"linux": "Linux", "darwin": "macOS", "win32": "Windows"}.get(PLATFORM, PLATFORM)
 
 def detect_default_mode() -> str:
-    return "tun" if PLATFORM == "linux" else "socks"
+    if PLATFORM == "linux": return "tun"
+    if PLATFORM == "win32": return "windows"
+    return "socks"
 
 def set_system_proxy(host: str, port: int, enabled: bool):
     if PLATFORM == "darwin":
@@ -78,7 +80,9 @@ class Config:
             pass
 
     def mode_label(self):
-        return f"TUN (Linux)" if self.mode == "tun" else "SOCKS (cross-platform)"
+        if self.mode == "tun": return "TUN (Linux)"
+        if self.mode == "windows": return "Wintun (Windows)"
+        return "SOCKS (cross-platform)"
 
 def menu(header: str, opts: list[tuple[str, str]]) -> str:
     return ui.menu(header, opts)
@@ -103,7 +107,7 @@ def main_menu(cfg: Config):
             ui.clear(); ui.print_logo(); print("\n  Goodbye! 👻\n"); sys.exit(0)
 
 def settings_menu(cfg: Config):
-    mode_opts = [("tun", "TUN — full system VPN (Linux only)"), ("socks", "SOCKS — local proxy, cross-platform")]
+    mode_opts = [("tun", "TUN — full system VPN (Linux only)"), ("windows", "Wintun — full system VPN (Windows)"), ("socks", "SOCKS — local proxy, cross-platform")]
     while True:
         mode = cfg.mode_label()
         src = f"auto-fetch ({PLATFORM_OS})" if not cfg.proxy_file else f"custom ({cfg.proxy_file})"
@@ -156,6 +160,9 @@ def about():
 def run_vpn(cfg: Config):
     if cfg.mode == "tun" and PLATFORM != "linux":
         input("  TUN mode not available on this platform. Press Enter...")
+        return
+    if cfg.mode == "windows" and PLATFORM != "win32":
+        input("  Wintun mode is Windows-only. Press Enter...")
         return
 
     ui.clear()
@@ -228,6 +235,17 @@ def run_vpn(cfg: Config):
         atexit.register(cleanup)
         stop_event.wait()
 
+    elif PLATFORM == "win32":
+        from windows_vpn import run as win_run
+        print(f"  [3/4] Setting up Wintun adapter and routing...")
+        print(f"  [4/4] VPN is LIVE! Rotating every {cfg.interval}s")
+        print(f"\n  ── Press Ctrl+C to stop ──\n")
+        pool.start_auto_rotate()
+        pool.start_health_checks()
+        win_run(pool, cfg.interval, cfg.kill_switch)
+        pool.stop()
+        cfg.save()
+
     else:
         from local_proxy import LocalSocksProxy
         ui.step(3, 4, f"Starting SOCKS5 proxy on 127.0.0.1:{cfg.proxy_port}...")
@@ -261,7 +279,7 @@ def run_vpn(cfg: Config):
 def main():
     ap = argparse.ArgumentParser(description="GhostVPN — rotating-IP VPN via SOCKS5 proxy pool", add_help=False)
     ap.add_argument("--cli", action="store_true", help="use CLI mode instead of interactive menu")
-    ap.add_argument("--mode", choices=["tun", "socks"])
+    ap.add_argument("--mode", choices=["tun", "socks", "windows"])
     ap.add_argument("--interval", type=int)
     ap.add_argument("--proxy-port", type=int)
     ap.add_argument("--proxies", type=str)
@@ -279,7 +297,7 @@ Usage:
   python vpn.py --cli ...    CLI mode (for scripts)
 
 CLI options:
-  --mode tun|socks           TUN (Linux) or SOCKS proxy
+  --mode tun|socks|windows   TUN (Linux), SOCKS proxy, or Wintun (Windows)
   --interval SECONDS         Rotation interval (default: 180)
   --proxy-port PORT          Local SOCKS port (default: 10800)
   --proxies FILE             Custom proxy list file
