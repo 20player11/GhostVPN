@@ -7,7 +7,7 @@ import subprocess
 import sys
 import threading
 import time
-import pyfiglet
+import ui
 from utils import log, setup_log, current_ip
 from proxy_pool import ProxyPool
 
@@ -41,34 +41,6 @@ def _mac_network_services() -> list[str]:
     r = subprocess.run(["networksetup", "-listallnetworkservices"], capture_output=True, text=True, check=False)
     return [l.strip() for l in r.stdout.splitlines() if l.strip() and not l.startswith("*") and "disabled" not in l.lower()]
 
-def _cls():
-    sys.stdout.write("\033[2J\033[H")
-    sys.stdout.flush()
-
-def _gradient(text: str, r1: int, g1: int, b1: int, r2: int, g2: int, b2: int) -> str:
-    out = []
-    chars = list(text)
-    n = len(chars)
-    for i, ch in enumerate(chars):
-        t = i / max(n - 1, 1)
-        r = int(r1 + (r2 - r1) * t)
-        g = int(g1 + (g2 - g1) * t)
-        b = int(b1 + (b2 - b1) * t)
-        out.append(f"\033[38;2;{r};{g};{b}m{ch}")
-    out.append("\033[0m")
-    return "".join(out)
-
-def _print_logo():
-    raw = pyfiglet.figlet_format("GHOSTVPN", font="slant")
-    lines = raw.rstrip("\n").split("\n")
-    for i, line in enumerate(lines):
-        t = i / max(len(lines) - 1, 1)
-        r = int(40 + (160 - 40) * t)
-        g = int(200 + (50 - 200) * t)
-        b = int(255 + (255 - 255) * t)
-        print(f"\033[38;2;{r};{g};{b}m{line}\033[0m")
-    print(_gradient("              👻  ROTATING IP VPN  👻", 0, 200, 255, 180, 50, 255))
-    print()
 
 class Config:
     def __init__(self):
@@ -109,19 +81,7 @@ class Config:
         return f"TUN (Linux)" if self.mode == "tun" else "SOCKS (cross-platform)"
 
 def menu(header: str, opts: list[tuple[str, str]]) -> str:
-    _cls()
-    _print_logo()
-    print(f"  {header}\n")
-    for i, (label, desc) in enumerate(opts, 1):
-        print(f"     [{i}] {label}")
-        if desc:
-            print(f"         {desc}")
-    print()
-    try:
-        c = input("  └─ Choice: ").strip()
-        return str(int(c))
-    except (ValueError, IndexError):
-        return ""
+    return ui.menu(header, opts)
 
 def main_menu(cfg: Config):
     basic_opts = [
@@ -140,7 +100,7 @@ def main_menu(cfg: Config):
         elif c == "3":
             about()
         elif c == "4":
-            _cls(); _print_logo(); print("\n  Goodbye! 👻\n"); sys.exit(0)
+            ui.clear(); ui.print_logo(); print("\n  Goodbye! 👻\n"); sys.exit(0)
 
 def settings_menu(cfg: Config):
     mode_opts = [("tun", "TUN — full system VPN (Linux only)"), ("socks", "SOCKS — local proxy, cross-platform")]
@@ -191,53 +151,35 @@ def settings_menu(cfg: Config):
             return
 
 def about():
-    _cls()
-    _print_logo()
-    print("""
-  GhostVPN 👻
-
-  A rotating-IP VPN that routes your traffic through a
-  pool of free SOCKS5 proxies. No paid APIs.
-
-  Mode      │  TUN (Linux)   — system-wide VPN
-            │  SOCKS (all)   — local proxy, configure apps
-
-  Version   │  v1.4.0
-  License   │  MIT
-  Repo      │  https://github.com/20player11/GhostVPN
-
-  Press any key to return.
-""")
-    try:
-        input()
-    except:
-        pass
+    ui.about()
 
 def run_vpn(cfg: Config):
     if cfg.mode == "tun" and PLATFORM != "linux":
         input("  TUN mode not available on this platform. Press Enter...")
         return
 
-    _cls()
-    _print_logo()
+    ui.clear()
+    ui.print_logo()
     print(f"  Starting VPN in {cfg.mode_label()} mode...\n")
 
     setup_log(cfg.verbose)
     pool = ProxyPool(interval=cfg.interval)
 
-    print(f"  [1/4] Building proxy pool...")
+    ui.step(1, 4, "Building proxy pool...")
     if cfg.proxy_file:
         pool.load_file(cfg.proxy_file)
     else:
         pool.refresh()
 
     pool.print_status()
-    if pool.get() is None:
+    ok = pool.get() is not None
+    ui.step(1, 4, f"Proxy pool ready ({pool.size()} proxies)", ok=ok)
+    if not ok:
         input("  No working proxies found. Press Enter...")
         return
 
     ip = current_ip(pool.get())
-    print(f"  [2/4] Exit IP through proxy: {ip or 'unknown'}")
+    ui.step(2, 4, f"Exit IP: {ip or 'unknown'}")
     log.info("VPN ready — pool has %d proxies, active: %s", pool.size(), ip or "?")
 
     stop_event = threading.Event()
@@ -248,19 +190,19 @@ def run_vpn(cfg: Config):
         from tun import TunManager, PROXY_PORT
         from transproxy import TransProxy
         from dns import DnsProxy
-        print(f"  [3/4] Setting up TUN device and routing...")
+        tun_ok = False
+        ui.step(3, 4, "Setting up TUN device...")
         tun = TunManager()
         try:
             tun.create()
-        except Exception as e:
-            input(f"  Failed to create tun: {e}. Press Enter...")
-            return
-        try:
             tun.setup_routing()
             tun.setup_iptables()
+            tun_ok = True
         except Exception as e:
-            input(f"  Failed to set up routing: {e}. Press Enter...")
+            input(f"  Failed to set up TUN: {e}. Press Enter...")
             return
+        finally:
+            ui.step(3, 4, "TUN device ready", ok=tun_ok)
         proxy = TransProxy(pool, bind_port=PROXY_PORT, kill_switch=cfg.kill_switch)
         proxy.start()
         threading.Thread(target=proxy.serve, daemon=True).start()
@@ -269,45 +211,16 @@ def run_vpn(cfg: Config):
         threading.Thread(target=dns.serve, daemon=True).start()
         pool.start_auto_rotate()
         pool.start_health_checks()
-        CYAN = "\033[38;2;0;200;255m"
-        YELLOW = "\033[38;2;255;220;80m"
-        GREEN = "\033[38;2;100;255;100m"
-        BOLD = "\033[1m"
-        RESET = "\033[0m"
 
-        def _status():
-            cols = 80
-            try:
-                cols = os.get_terminal_size().columns
-            except:
-                pass
-            while not stop_event.is_set():
-                active = pool.get()
-                host = "none"
-                ptype = ""
-                if active:
-                    host = f"{active[0].split('.')[0]}.{active[0].split('.')[1]}.*.*"
-                    ptype = f" {active[2]}"
-                s = proxy.stats_line()
-                bar = f"  {BOLD}GHOSTVPN{RESET}  {CYAN}│{RESET}  {s}  {CYAN}│{RESET}  pool {GREEN}{pool.size()}{RESET}  {CYAN}│{RESET}  proxy {YELLOW}{host}{ptype}{RESET}  "
-                if len(bar) >= cols:
-                    bar = bar[:cols - 1]
-                else:
-                    bar = bar.ljust(cols - 1)
-                sys.stdout.write(f"\r{RESET}{bar}")
-                sys.stdout.flush()
-                stop_event.wait(1)
-            sys.stdout.write(f"\r\033[K")
-            sys.stdout.flush()
-
-        threading.Thread(target=_status, daemon=True).start()
-        print(f"  [4/4] VPN is LIVE! Rotating every {cfg.interval}s")
+        status = ui.StatusDisplay(pool, proxy=proxy)
+        status.start()
+        ui.step(4, 4, f"VPN is LIVE! Rotating every {cfg.interval}s", ok=True)
         print(f"\n  ── Press Ctrl+C to stop ──\n")
         _orig = signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)
         def cleanup(*_):
             sys.stdout.write(f"\n")
             sys.stdout.flush()
-            cfg.save(); pool.stop(); proxy.stop(); dns.stop(); tun.cleanup(); stop_event.set()
+            cfg.save(); pool.stop(); proxy.stop(); dns.stop(); tun.cleanup(); status.stop(); stop_event.set()
             signal.signal(signal.SIGINT, _orig[0])
             signal.signal(signal.SIGTERM, _orig[1])
         signal.signal(signal.SIGINT, cleanup)
@@ -317,23 +230,25 @@ def run_vpn(cfg: Config):
 
     else:
         from local_proxy import LocalSocksProxy
-        print(f"  [3/4] Starting SOCKS5 proxy on 127.0.0.1:{cfg.proxy_port}...")
+        ui.step(3, 4, f"Starting SOCKS5 proxy on 127.0.0.1:{cfg.proxy_port}...")
         local = LocalSocksProxy(pool, port=cfg.proxy_port, kill_switch=cfg.kill_switch)
         local.start()
         threading.Thread(target=local.serve, daemon=True).start()
         if cfg.sys_proxy:
             set_system_proxy("127.0.0.1", cfg.proxy_port, enabled=True)
-            print(f"  [4/4] System proxy configured")
+            ui.step(4, 4, "System proxy configured", ok=True)
         else:
-            print(f"  [4/4] Done")
+            ui.step(4, 4, "SOCKS5 proxy ready", ok=True)
         pool.start_auto_rotate()
         pool.start_health_checks()
+        status = ui.StatusDisplay(pool)
+        status.start()
         print(f"\n  VPN is LIVE! Rotating IP every {cfg.interval}s")
         print(f"  Configure your apps → SOCKS5 127.0.0.1:{cfg.proxy_port}")
         print(f"\n  ── Press Ctrl+C to stop ──\n")
         _orig = signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)
         def cleanup(*_):
-            cfg.save(); pool.stop(); local.stop()
+            cfg.save(); pool.stop(); local.stop(); status.stop()
             if cfg.sys_proxy:
                 set_system_proxy("127.0.0.1", cfg.proxy_port, enabled=False)
             signal.signal(signal.SIGINT, _orig[0])
