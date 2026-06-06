@@ -227,10 +227,11 @@ def about():
 A rotating-IP VPN that routes your traffic through a
 pool of free SOCKS5 proxies. No paid APIs.
 
-Mode      │  TUN (Linux)   — system-wide VPN
-          │  SOCKS (all)   — local proxy, configure apps
+Mode      │  TUN (Linux)    — system-wide VPN
+          │  Wintun (Win)   — system-wide VPN
+          │  SOCKS (all)    — local proxy, configure apps
 
-Version   │  v1.5.0
+Version   │  v1.5.1
 License   │  MIT
 Repo      │  https://github.com/20player11/GhostVPN
 """

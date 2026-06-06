@@ -35,9 +35,10 @@ Your browser ──▶ tun0 ──▶ │ iptables REDIRECT        │
                      └──────────────────────────────┘
 ```
 
-Two modes:
+Three modes:
 
 - **TUN mode** (Linux) — system-wide VPN using `tun` + `iptables`. All TCP traffic goes through the proxy automatically. DNS queries are forwarded through the proxy via a local DNS forwarder to prevent leaks.
+- **Wintun mode** (Windows) — system-wide VPN using Wintun TAP adapter. Routes all TCP traffic through the SOCKS5 proxy pool. DNS forwarded through the tunnel.
 - **SOCKS mode** (Linux, macOS, Windows) — local SOCKS5 proxy on `127.0.0.1:10800`. Configure your apps or system proxy to use it.
 
 ## Quick start
@@ -76,7 +77,7 @@ python3 vpn.py --cli --mode socks --sys-proxy
 
 Configure your browser to use SOCKS5 `127.0.0.1:10800`, or let GhostVPN set the system proxy automatically.
 
-### Windows (SOCKS mode)
+### Windows (Wintun mode — full system VPN)
 
 ```powershell
 cd GhostVPN
@@ -84,11 +85,11 @@ python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 
-# Interactive menu
+# Interactive menu (no admin needed, Wintun auto-downloaded)
 python vpn.py
 
-# CLI mode with system proxy
-python vpn.py --cli --mode socks --sys-proxy
+# CLI mode
+python vpn.py --cli --mode windows
 ```
 
 ## Usage
@@ -108,7 +109,7 @@ Run `python vpn.py` to see:
 
   MAIN MENU
 
-     [1] ▶  START VPN  (TUN (Linux))
+     [1] ▶  START VPN  (TUN (Linux) / Wintun (Windows))
           interval=180s  port=10800
 
      [2] Settings
@@ -129,15 +130,15 @@ Run `python vpn.py` to see:
 python vpn.py --cli [options]
 ```
 
-| Flag            | Default                       | Description                                       |
-| --------------- | ----------------------------- | ------------------------------------------------- |
-| `--mode`        | `tun` (Linux), `socks` (else) | `tun` = system VPN (Linux), `socks` = local proxy |
-| `--interval`    | `180`                         | Seconds between IP rotations                      |
-| `--proxies`     | `—`                           | Path to custom proxy list (`host:port` per line)  |
-| `--proxy-port`  | `10800`                       | Local SOCKS proxy port (socks mode)               |
-| `--sys-proxy`   | `off`                         | Automatically set system proxy (macOS/Windows)    |
-| `--kill-switch` | `off`                         | Drop connections if all proxies fail (no IP leak) |
-| `--verbose`     | `off`                         | Debug-level logs                                  |
+| Flag            | Default                                        | Description                                                                         |
+| --------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `--mode`        | `tun` (Linux), `windows` (Win), `socks` (else) | `tun` = system VPN (Linux), `windows` = Wintun VPN (Windows), `socks` = local proxy |
+| `--interval`    | `180`                                          | Seconds between IP rotations                                                        |
+| `--proxies`     | `—`                                            | Path to custom proxy list (`host:port` per line)                                    |
+| `--proxy-port`  | `10800`                                        | Local SOCKS proxy port (socks mode)                                                 |
+| `--sys-proxy`   | `off`                                          | Automatically set system proxy (macOS/Windows)                                      |
+| `--kill-switch` | `off`                                          | Drop connections if all proxies fail (no IP leak)                                   |
+| `--verbose`     | `off`                                          | Debug-level logs                                                                    |
 
 ### Custom proxy lists
 
@@ -147,15 +148,15 @@ python vpn.py --cli --mode socks --proxies proxies.txt
 
 ## Platform comparison
 
-| Feature             | Linux (TUN)        | macOS (SOCKS)        | Windows (SOCKS)      |
-| ------------------- | ------------------ | -------------------- | -------------------- |
-| System-wide routing | ✅ Automatic       | ⚠️ Manual app config | ⚠️ Manual app config |
-| Root required       | ✅ Yes             | ❌ No                | ❌ No                |
-| Proxy rotation      | ✅                 | ✅                   | ✅                   |
-| Kill switch         | ✅ `--kill-switch` | ✅                   | ✅                   |
-| DNS leak protection | ✅ Built-in        | ⚠️ Manual app config | ⚠️ Manual app config |
-| Auto system proxy   | ❌                 | ✅ `--sys-proxy`     | ✅ `--sys-proxy`     |
-| UDP/ICMP            | ❌ Not supported   | ❌ Not supported     | ❌ Not supported     |
+| Feature             | Linux (TUN)        | macOS (SOCKS)        | Windows (Wintun) |
+| ------------------- | ------------------ | -------------------- | ---------------- |
+| System-wide routing | ✅ Automatic       | ⚠️ Manual app config | ✅ Automatic     |
+| Root required       | ✅ Yes             | ❌ No                | ❌ No            |
+| Proxy rotation      | ✅                 | ✅                   | ✅               |
+| Kill switch         | ✅ `--kill-switch` | ✅                   | ✅               |
+| DNS leak protection | ✅ Built-in        | ⚠️ Manual app config | ✅ Built-in      |
+| Auto system proxy   | ❌                 | ✅ `--sys-proxy`     | ❌               |
+| UDP/ICMP            | ❌ Not supported   | ❌ Not supported     | ❌ Not supported |
 
 ## Verification
 
@@ -185,14 +186,16 @@ GhostVPN has the following security features enabled:
 ```
 vpn/
 ├── vpn.py            # CLI entry — interactive menu or --cli mode
+├── ui.py             # Rich terminal UI (menus, status display, about)
+├── windows_vpn.py    # Windows Wintun adapter, TCP forwarding, DNS tunnel
+├── wintun_dl.py      # Auto-downloads wintun.dll at runtime
 ├── tun.py            # Linux TUN device, routing, iptables
 ├── transproxy.py     # Linux transparent TCP → SOCKS5 proxy
 ├── local_proxy.py    # Cross-platform SOCKS5 proxy server
 ├── proxy_pool.py     # Auto-fetch, health-check, rotation
 ├── dns.py            # DNS forwarder (prevents DNS leaks in TUN mode)
 ├── utils.py          # Logging, IP lookup, helpers
-├── requirements.txt  # PySocks + pyfiglet
-├── SECURITY.md       # Disclosure policy
+├── requirements.txt  # PySocks, pyfiglet, rich, questionary
 ├── LICENSE           # MIT
 └── README.md
 ```
@@ -226,6 +229,8 @@ sudo ip link del tun0 2>/dev/null
 
 - [PySocks](https://github.com/Anorov/PySocks) — SOCKS5 client protocol
 - [pyfiglet](https://github.com/pwaller/pyfiglet) — ASCII art generation
+- [rich](https://github.com/Textualize/rich) — Terminal UI components
+- [questionary](https://github.com/tmbo/questionary) — Interactive prompts
 
 ## License
 
